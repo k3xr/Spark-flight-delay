@@ -1,21 +1,20 @@
 import spark.implicits._
 import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.mllib.regression.LabeledPoint
-import org.apache.spark.mllib.linalg.{Vector, Vectors}
 import org.apache.spark.sql.SQLContext
 
 val csv = sc.textFile("hdfs:///user/hadoop/2008.csv")
 
 // Define class FlightDataRow with csv info
 case class FlightDataRow(
-    year: Int, month: Int, dayOfMonth: Int, dayOfWeek: Int,//4
-    depTime: Int, crsDepTime: Int, arrTime:Int, crsArrTime: Int,//4
-    uniqueCarrier: String, flightNum: Int, tailNum: String,//3
-    actualElapsedTime: Int, crsElapsedTime: Int, airTime: Int, arrDelay: Int, depDelay: Int,//5
-    origin: String, dest: String, distance: Int,//3
-    taxiIn: Int, taxiOut: Int,//2
-    cancelled: Int, cancellationCode: String, diverted: Int,//3    
-    carrierDelay: Int, weatherDelay: Int, nasDelay: Int, securityDelay: Int, lateAircraftDelay: Int//5
+    year: Int, month: Int, dayOfMonth: Int, dayOfWeek: Int,//4, 0-3
+    depTime: Int, crsDepTime: Int, arrTime:Int, crsArrTime: Int,//4, 4-7
+    uniqueCarrier: String, flightNum: Int, tailNum: String,//3, 8-10
+    actualElapsedTime: Int, crsElapsedTime: Int, airTime: Int, arrDelay: Int, depDelay: Int,//5, 11-15
+    origin: String, dest: String, distance: Int,//3, 16-18
+    taxiIn: Int, taxiOut: Int,//2, 19-20
+    cancelled: Int, cancellationCode: String, diverted: Int,//3, 21-23
+    carrierDelay: Int, weatherDelay: Int, nasDelay: Int, securityDelay: Int, lateAircraftDelay: Int//5, 24-28
     )
 
 //To find the headers
@@ -24,7 +23,8 @@ val header = csv.first
 //To remove the header
 val data = csv.filter(_(0) != header(0))
 
-var flightsDF = data.map((s: String) => {
+var flightsDF = data
+      .map((s: String) => {
         var fields = s.split(",")
         var i = 0
         //Para quitar los NA
@@ -32,8 +32,7 @@ var flightsDF = data.map((s: String) => {
           if(fields(i)=="NA"){
             fields(i) = "0"
           }
-        }
-
+        }        
         FlightDataRow(
           fields(0).toInt, fields(1).toInt, fields(2).toInt, fields(3).toInt,//4 
           fields(4).toInt, fields(5).toInt, fields(6).toInt, fields(7).toInt,//4
@@ -44,27 +43,60 @@ var flightsDF = data.map((s: String) => {
           fields(21).toInt, fields(22), fields(23).toInt,//3
           fields(24).toInt, fields(25).toInt, fields(26).toInt, fields(27).toInt, fields(28).toInt//5
         )
-    }).toDF
+    }).toDF()
+
+//Si el vuelo esta cancelado no nos interesa, asi que cogemos los que estan sin cancelar
+flightsDF = flightsDF.filter(flightsDF("cancelled")==="0")
+
 
 // Shows 15 elements 
 flightsDF.show(15)
 
-// SQL
-flightsDF.createOrReplaceTempView("flights")
+// Realmente no lo estamos usando asique lo dejo comentado
+// SQL 
+//flightsDF.createOrReplaceTempView("flights")
 
 // Count number of rows
-spark.sql("select count(1) from flights").collect()(0).getLong(0)
+//spark.sql("select count(1) from flights").collect()(0).getLong(0)
 
 // Remove unused columns
 flightsDF = flightsDF.drop("arrTime","actualElapsedTime","airTime",
     "taxiIn","diverted","carrierDelay","weatherDelay","nasDelay",
     "securityDelay","lateAircraftDelay")
 
+//flightsDF.show(15)
+
+// Remove categorical string variables
+flightsDF = flightsDF.drop("uniqueCarrier","tailNum",
+    "origin", "dest", "cancellationCode")
+
+//flightsDF.show(15)
+
+//remove unwanted variables
+flightsDF = flightsDF.drop("cancelled", "year")
 flightsDF.show(15)
 
-//To create a RDD of (label, features) pairs
-/*val parsedData = data.map { line =>
-    val parts = line.split(',')
-    LabeledPoint(parts(0).toInt, Vectors.dense(parts(1).split(' ').map(_.toInt)))
-    }.cache()
-*/
+val splits = flightsDF.randomSplit(Array(0.6, 0.4), seed =11L)
+val training = splits(0).cache()
+val test = splits(1)
+
+// Lo siguiente esta mal, creo que hay que combinar las variables en una columna features
+// Label es la variable objetivo y features las que se usan para predecirla
+// Fuente: http://www.cakesolutions.net/teamblogs/spark-mllib-linear-regression-example-and-vocabulary
+val lr = new LinearRegression()
+  .setFeaturesCol(Array("month","dayOfMonth", "dayOfWeek", "depTime",
+                  "crsDepTime", "crsArrTime", "flightNum", "crsElapsedTime",
+                  "depDelay","distance", "taxiOut"))
+  .setLabelCol("arrDelay")
+  .setMaxIter(10)
+
+val lrModel = lr.fit(training)
+
+println(s"Coefficients: ${lrModel.coefficients} Intercept: ${lrModel.intercept}")
+
+val trainingSummary = lrModel.summary
+println(s"numIterations: ${trainingSummary.totalIterations}")
+println(s"objectiveHistory: ${trainingSummary.objectiveHistory.toList}")
+trainingSummary.residuals.show()
+println(s"RMSE: ${trainingSummary.rootMeanSquaredError}")
+println(s"r2: ${trainingSummary.r2}")
