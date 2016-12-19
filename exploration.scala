@@ -2,6 +2,7 @@ import spark.implicits._
 import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.sql.SQLContext
+import org.apache.spark.ml.feature.VectorAssembler
 
 val csv = sc.textFile("hdfs:///user/hadoop/2008.csv")
 
@@ -80,20 +81,20 @@ val splits = flightsDF.randomSplit(Array(0.6, 0.4), seed =11L)
 val training = splits(0).cache()
 val test = splits(1)
 
-// Lo siguiente esta mal, creo que hay que combinar las variables en una columna features
-// Label es la variable objetivo y features las que se usan para predecirla
-// Fuente: http://www.cakesolutions.net/teamblogs/spark-mllib-linear-regression-example-and-vocabulary
+val assembler = new VectorAssembler()
+ .setInputCols(Array("month", "dayOfMonth", "dayOfWeek", "depTime", "crsDepTime", "crsArrTime", "flightNum", "crsElapsedTime", "depDelay", "distance", "taxiOut"))
+ .setOutputCol("features")
+
+val output = assembler.transform(training)
+
 val lr = new LinearRegression()
-  .setFeaturesCol(Array("month","dayOfMonth", "dayOfWeek", "depTime",
-                  "crsDepTime", "crsArrTime", "flightNum", "crsElapsedTime",
-                  "depDelay","distance", "taxiOut"))
+  .setFeaturesCol("features")
   .setLabelCol("arrDelay")
   .setMaxIter(10)
 
-val lrModel = lr.fit(training)
+val lrModel = lr.fit(output)
 
 println(s"Coefficients: ${lrModel.coefficients} Intercept: ${lrModel.intercept}")
-
 val trainingSummary = lrModel.summary
 println(s"numIterations: ${trainingSummary.totalIterations}")
 println(s"objectiveHistory: ${trainingSummary.objectiveHistory.toList}")
