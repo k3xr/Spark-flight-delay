@@ -18,17 +18,17 @@ case class FlightDataRow(
     carrierDelay: Int, weatherDelay: Int, nasDelay: Int, securityDelay: Int, lateAircraftDelay: Int//5, 24-28
     )
 
-//To find the headers
+// Find the headers
 val header = csv.first
 
-//To remove the header
+// Remove the header
 val data = csv.filter(_(0) != header(0))
 
 var flightsDF = data
       .map((s: String) => {
         var fields = s.split(",")
         var i = 0
-        //Para quitar los NA
+        // Removes NA
         for(i <- 0 until fields.length){
           if(fields(i)=="NA"){
             fields(i) = "0"
@@ -46,17 +46,14 @@ var flightsDF = data
         )
     }).toDF()
 
-//Si el vuelo esta cancelado no nos interesa, asi que cogemos los que estan sin cancelar
+// Remove cancelled flights
 flightsDF = flightsDF.filter(flightsDF("cancelled")==="0")
-
 
 // Shows 15 elements 
 flightsDF.show(15)
 
-// Realmente no lo estamos usando asique lo dejo comentado
 // SQL 
-//flightsDF.createOrReplaceTempView("flights")
-
+// flightsDF.createOrReplaceTempView("flights")
 // Count number of rows
 //spark.sql("select count(1) from flights").collect()(0).getLong(0)
 
@@ -65,18 +62,15 @@ flightsDF = flightsDF.drop("arrTime","actualElapsedTime","airTime",
     "taxiIn","diverted","carrierDelay","weatherDelay","nasDelay",
     "securityDelay","lateAircraftDelay")
 
-//flightsDF.show(15)
-
 // Remove categorical string variables
 flightsDF = flightsDF.drop("uniqueCarrier","tailNum",
     "origin", "dest", "cancellationCode")
 
-//flightsDF.show(15)
-
-//remove unwanted variables
+// Remove unwanted variables
 flightsDF = flightsDF.drop("cancelled", "year")
 flightsDF.show(15)
 
+// Split dataset for training and testing
 val splits = flightsDF.randomSplit(Array(0.6, 0.4), seed =11L)
 val training = splits(0).cache()
 val test = splits(1)
@@ -85,14 +79,16 @@ val assembler = new VectorAssembler()
  .setInputCols(Array("month", "dayOfMonth", "dayOfWeek", "depTime", "crsDepTime", "crsArrTime", "flightNum", "crsElapsedTime", "depDelay", "distance", "taxiOut"))
  .setOutputCol("features")
 
-val output = assembler.transform(training)
+val training2 = assembler.transform(training)
 
+// New linear regression model
 val lr = new LinearRegression()
   .setFeaturesCol("features")
   .setLabelCol("arrDelay")
   .setMaxIter(10)
 
-val lrModel = lr.fit(output)
+// Train the model
+val lrModel = lr.fit(training2)
 
 println(s"Coefficients: ${lrModel.coefficients} Intercept: ${lrModel.intercept}")
 val trainingSummary = lrModel.summary
@@ -101,3 +97,7 @@ println(s"objectiveHistory: ${trainingSummary.objectiveHistory.toList}")
 trainingSummary.residuals.show()
 println(s"RMSE: ${trainingSummary.rootMeanSquaredError}")
 println(s"r2: ${trainingSummary.r2}")
+
+// Test the model
+val test2 = assembler.transform(test)
+lrModel.transform(test2).show(40)
