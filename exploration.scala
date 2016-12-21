@@ -5,6 +5,7 @@ import org.apache.spark.ml.tuning.{ParamGridBuilder, CrossValidator, CrossValida
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.sql.SQLContext
 import org.apache.spark.ml.feature.VectorAssembler
+import org.apache.spark.mllib.evaluation.RegressionMetrics
 
 val csv = sc.textFile("hdfs:///user/hadoop/2008.csv")
 
@@ -30,6 +31,7 @@ var flightsDF = data
       .map((s: String) => {
         var fields = s.split(",")
         var i = 0
+
         // Removes NA
         for(i <- 0 until fields.length){
           if(fields(i)=="NA"){
@@ -37,7 +39,7 @@ var flightsDF = data
           }
         }
 
-        //Convertimos de hhmm a minutos directamente
+        // Converts hours to minutes
         var times = Array(fields(4).toInt, fields(5).toInt, fields(6).toInt, fields(7).toInt)//4
 
         for(i <- 0 until times.length){
@@ -58,23 +60,23 @@ var flightsDF = data
         )
     }).toDF()
 
-// Remove cancelled flights
+// Removes cancelled flights
 flightsDF = flightsDF.filter(flightsDF("cancelled")==="0")
 
 // Shows 15 elements 
 //flightsDF.show(15)
 
 // SQL 
-// flightsDF.createOrReplaceTempView("flights")
+//flightsDF.createOrReplaceTempView("flights")
 // Count number of rows
 //spark.sql("select count(1) from flights").collect()(0).getLong(0)
 
-// Remove unused columns
+// Removes unused columns
 flightsDF = flightsDF.drop("arrTime","actualElapsedTime","airTime",
     "taxiIn","diverted","carrierDelay","weatherDelay","nasDelay",
     "securityDelay","lateAircraftDelay")
 
-// Remove categorical string variables
+// Removes categorical string variables
 flightsDF = flightsDF.drop("uniqueCarrier","tailNum",
     "origin", "dest", "cancellationCode")
 
@@ -95,25 +97,24 @@ var finalDF = flightsDF
   .select("features", "label")
 
 // Split dataset for training and testing
-val splits = finalDF.randomSplit(Array(0.6, 0.4), seed =11L)
+val splits = finalDF.randomSplit(Array(0.6, 0.4), seed = 11L)
 val training = splits(0).cache()
 val test = splits(1)
 
-// Generamos la regresion linear
+// Generates linear regression
 val lr = new LinearRegression()
   .setFeaturesCol("features")
   .setLabelCol("label")
   .setMaxIter(10)
 
-// Preparamos el grid de distintos parametros para generar varios modelos
+// Prepares parameters grid to generate several models
 val paramGrid = new ParamGridBuilder()
   .addGrid(lr.regParam, Array(0.1, 0.01))
   .addGrid(lr.fitIntercept)
-  .addGrid(lr.elasticNetParam, Array0(.0, 0.5, 1.0))
+  .addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0))
   .build()
 
-
-// Preparamos la Cross Validation para obtener el mejor modelo
+// Prepares Cross Validation to obtain best model
 val cv = new CrossValidator()
   .setEstimator(lr)
   .setEvaluator(new RegressionEvaluator)
@@ -121,10 +122,10 @@ val cv = new CrossValidator()
   .setNumFolds(3)
 
 val lrModel = cv.fit(training)
-//Guardar el modelo
+// Saves the model to hdfs
 lrModel.save("hdfs:///user/hadoop/bestLinearRegressionSpark")
 
-//Cargar el modelo
+// Loads the model from hdfs
 //val lrModelLoaded = CrossValidatorModel.load("hdfs:///user/hadoop/bestLinearRegressionSpark")
 //val bestModel = lrModelLoaded.bestModel
 
@@ -135,13 +136,11 @@ val resultDF = bestModel.transform(test)
 
 //resultDF.show(40)
 
-//Esto peta: Si consigues pasar el resultDF a un rdd que sea (Double, Double) de prediction, label (o al reves, no se) ya esta
-predictionAndLabels = resultDF.rdd.map[(Double,Double)] (row=>{(row.getAs(Double)("prediction"), row.getAs(Double)("label"))})
+// DF to rdd Prediction, labels
+val predictionAndLabels = resultDF.rdd.map[(Double,Double)] (row=>{(row.getDouble(2), row.getDouble(1))})
 
-//No queda claro cual alternativa es me salen las dos en internet hay que probar
-val metrics = new RegressionMetrics(predictionAndLabels)
 // Instantiate metrics object
-val metrics = new RegressionMetrics(valuesAndPreds)
+val metrics = new RegressionMetrics(predictionAndLabels)
 
 // Squared error
 println(s"MSE = ${metrics.meanSquaredError}")
@@ -156,7 +155,6 @@ println(s"MAE = ${metrics.meanAbsoluteError}")
 // Explained variance
 println(s"Explained variance = ${metrics.explainedVariance}")
 
-
 /*
 println(s"Coefficients: ${lrModel.bestModel.coefficients} Intercept: ${lrModel.intercept}")
 val trainingSummary = lrModel.summary
@@ -164,6 +162,5 @@ println(s"numIterations: ${trainingSummary.totalIterations}")
 println(s"objectiveHistory: ${trainingSummary.objectiveHistory.toList}")
 trainingSummary.residuals.show()
 println(s"RMSE: ${trainingSummary.rootMeanSquaredError}")
-println(s"r2: ${trainingSummary.r2}")*/
-
-///Siempre falla: [41,1.0,[1.0,1.0,2.0,2.0,2355.0,755.0,166.0,300.0,7.0,2454.0,34.0]]
+println(s"r2: ${trainingSummary.r2}")
+*/
