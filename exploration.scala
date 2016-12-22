@@ -7,7 +7,7 @@ import org.apache.spark.sql.SQLContext
 import org.apache.spark.ml.feature.VectorAssembler
 import org.apache.spark.mllib.evaluation.RegressionMetrics
 
-val csv = sc.textFile("hdfs:///user/hadoop/2008.csv")
+val csv = sc.textFile("hdfs:///user/hadoop/data.csv")
 
 // Define class FlightDataRow with csv info
 case class FlightDataRow(
@@ -63,85 +63,81 @@ var flightsDF = data
 // Removes cancelled flights
 flightsDF = flightsDF.filter(flightsDF("cancelled")==="0")
 
-// Shows 15 elements 
-//flightsDF.show(15)
-
-// SQL 
-//flightsDF.createOrReplaceTempView("flights")
-// Count number of rows
-//spark.sql("select count(1) from flights").collect()(0).getLong(0)
-
-// Removes unused columns
+// Remove unused columns
 flightsDF = flightsDF.drop("arrTime","actualElapsedTime","airTime",
     "taxiIn","diverted","carrierDelay","weatherDelay","nasDelay",
     "securityDelay","lateAircraftDelay")
 
-// Removes categorical string variables
+// Remove categorical string variables
 flightsDF = flightsDF.drop("uniqueCarrier","tailNum",
     "origin", "dest", "cancellationCode")
 
 // Remove unwanted variables
-flightsDF = flightsDF.drop("cancelled", "year")
-//flightsDF.show(15)
+flightsDF = flightsDF.drop("cancelled", "year", "month", "dayOfMonth", "dayOfWeek")
 
+//Prepare the data for the model
 val assembler = new VectorAssembler()
- //.setInputCols(Array("month", "dayOfMonth", "dayOfWeek", "depTime", "crsDepTime", "crsArrTime", "flightNum", "crsElapsedTime", "depDelay", "distance", "taxiOut"))
  .setInputCols(Array("depTime", "crsDepTime", "crsArrTime", "crsElapsedTime", "depDelay", "distance", "taxiOut"))
  .setOutputCol("features")
 
 flightsDF = assembler.transform(flightsDF)
 
-var finalDF = flightsDF
+//Just in case we only leave he important columns (features and label)
+flightsDF = flightsDF
   .withColumn("features", flightsDF("features"))
   .withColumn("label", flightsDF("arrDelay"))
   .select("features", "label")
 
 // Split dataset for training and testing
-val splits = finalDF.randomSplit(Array(0.6, 0.4), seed = 11L)
+val splits = flightsDF.randomSplit(Array(0.6, 0.4), seed = 11L)
 val training = splits(0).cache()
 val test = splits(1)
 
-// Generates linear regression
+// Generate linear regression
 val lr = new LinearRegression()
   .setFeaturesCol("features")
   .setLabelCol("label")
   .setMaxIter(10)
 
-// Prepares parameters grid to generate several models
+// Prepare parameters grid to generate several models
 val paramGrid = new ParamGridBuilder()
   .addGrid(lr.regParam, Array(0.1, 0.01))
   .addGrid(lr.fitIntercept)
   .addGrid(lr.elasticNetParam, Array(0.0, 0.5, 1.0))
   .build()
 
-// Prepares Cross Validation to obtain best model
+// Prepare Cross Validation to obtain best model
 val cv = new CrossValidator()
   .setEstimator(lr)
   .setEvaluator(new RegressionEvaluator)
   .setEstimatorParamMaps(paramGrid)
   .setNumFolds(3)
 
+//Train the model with cross validation
 val lrModel = cv.fit(training)
+
+// This is only if you want to save time in later executions
 // Saves the model to hdfs
-lrModel.save("hdfs:///user/hadoop/bestLinearRegressionSpark")
+//lrModel.save("hdfs:///user/hadoop/bestLinearRegressionSpark")
 
 // Loads the model from hdfs
 //val lrModelLoaded = CrossValidatorModel.load("hdfs:///user/hadoop/bestLinearRegressionSpark")
 //val bestModel = lrModelLoaded.bestModel
 
+
+// Obtain the best model
 val bestModel = lrModel.bestModel
 
 // Test the model
 val resultDF = bestModel.transform(test)
 
-//resultDF.show(40)
-
-// DF to rdd Prediction, labels
+// DF to rdd[(double, double)] -> rdd[(Prediction, labels)]
 val predictionAndLabels = resultDF.rdd.map[(Double,Double)] (row=>{(row.getDouble(2), row.getDouble(1))})
 
 // Instantiate metrics object
 val metrics = new RegressionMetrics(predictionAndLabels)
 
+// Print the different metrics
 // Squared error
 println(s"MSE = ${metrics.meanSquaredError}")
 println(s"RMSE = ${metrics.rootMeanSquaredError}")
@@ -154,13 +150,3 @@ println(s"MAE = ${metrics.meanAbsoluteError}")
 
 // Explained variance
 println(s"Explained variance = ${metrics.explainedVariance}")
-
-/*
-println(s"Coefficients: ${lrModel.bestModel.coefficients} Intercept: ${lrModel.intercept}")
-val trainingSummary = lrModel.summary
-println(s"numIterations: ${trainingSummary.totalIterations}")
-println(s"objectiveHistory: ${trainingSummary.objectiveHistory.toList}")
-trainingSummary.residuals.show()
-println(s"RMSE: ${trainingSummary.rootMeanSquaredError}")
-println(s"r2: ${trainingSummary.r2}")
-*/
